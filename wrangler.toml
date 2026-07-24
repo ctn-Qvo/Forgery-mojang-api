@@ -6,4 +6,4 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "skin-db"
-database_id = "your-database-id"
+database_id = "dec35d1a-0746-4ed1-9a83-7861b2b9b883"
