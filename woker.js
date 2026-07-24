@@ -1,7 +1,7 @@
 // 绑定 D1 数据库：DB
 export default {
   async fetch(request, env) {
-    // 确保表存在（每次请求尝试创建，已存在则忽略）
+    // 确保表存在
     await ensureTable(env);
 
     const url = new URL(request.url);
@@ -28,7 +28,7 @@ export default {
           'SELECT uuid FROM users WHERE username = ?'
         ).bind(username).first();
         if (!user) {
-          return jsonResponse({ error: 'User not found' }, 404);
+          return errorResponse(404, 'Not Found', 'The server has not found anything matching the request URI');
         }
         const uuidNoDash = user.uuid.replace(/-/g, '');
         return jsonResponse({ id: uuidNoDash, name: username });
@@ -38,12 +38,14 @@ export default {
       const profileMatch = path.match(/^\/session\/minecraft\/profile\/([a-f0-9]{32})$/i);
       if (profileMatch && method === 'GET') {
         const uuidNoDash = profileMatch[1];
+        // 验证 UUID 是否为有效的 32 位十六进制（已由正则保证）
         const uuidWithDash = uuidNoDash.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
         const user = await env.DB.prepare(
           'SELECT username, skin_url, cape_url, model FROM users WHERE uuid = ?'
         ).bind(uuidWithDash).first();
         if (!user) {
-          return jsonResponse({ error: 'Profile not found' }, 404);
+          // 官方文档：无玩家返回 204 空负载，但我们用 404 + 错误信息，更常见
+          return errorResponse(404, 'Not Found', 'The server has not found anything matching the request URI');
         }
         const textures = {
           timestamp: Date.now(),
@@ -72,9 +74,20 @@ export default {
       // ----- 拓展 API -----
       // 3. 批量获取 UUID
       if (path === '/profiles/minecraft' && method === 'POST') {
-        const body = await request.json();
-        if (!Array.isArray(body) || body.length === 0 || body.length > 10) {
-          return jsonResponse({ error: 'Invalid request: must be an array of 1-10 usernames' }, 400);
+        let body;
+        try {
+          body = await request.json();
+        } catch (e) {
+          return errorResponse(400, 'JsonParseException', 'Invalid JSON payload');
+        }
+        if (!Array.isArray(body)) {
+          return errorResponse(400, 'IllegalArgumentException', 'Request body must be a JSON array');
+        }
+        if (body.length === 0 || body.length > 10) {
+          return errorResponse(400, 'IllegalArgumentException', 'size must be between 1 and 10');
+        }
+        if (body.some(name => typeof name !== 'string' || name.trim() === '')) {
+          return errorResponse(400, 'IllegalArgumentException', 'Invalid profile name');
         }
         const uniqueNames = [...new Set(body)];
         const placeholders = uniqueNames.map(() => '?').join(',');
@@ -96,7 +109,7 @@ export default {
         return jsonResponse(output);
       }
 
-      // ----- 管理 API -----
+      // ----- 管理 API（错误响应也统一格式）-----
       // 4. 获取所有用户
       if (path === '/api/users' && method === 'GET') {
         const { results } = await env.DB.prepare(
@@ -113,38 +126,43 @@ export default {
           'SELECT uuid, username, skin_url, cape_url, model FROM users WHERE username = ?'
         ).bind(username).first();
         if (!user) {
-          return jsonResponse({ error: 'User not found' }, 404);
+          return errorResponse(404, 'Not Found', 'The server has not found anything matching the request URI');
         }
         return jsonResponse(user);
       }
 
-      // 6. 注册新用户（支持自定义UUID和URL）
+      // 6. 注册新用户
       if (path === '/api/register' && method === 'POST') {
-        const body = await request.json();
+        let body;
+        try {
+          body = await request.json();
+        } catch (e) {
+          return errorResponse(400, 'JsonParseException', 'Invalid JSON payload');
+        }
         const { username, uuid: customUuid, skin_url, cape_url, model } = body;
         if (!username) {
-          return jsonResponse({ error: 'Username required' }, 400);
+          return errorResponse(400, 'IllegalArgumentException', 'Username required');
         }
 
         const exist = await env.DB.prepare(
           'SELECT username FROM users WHERE username = ?'
         ).bind(username).first();
         if (exist) {
-          return jsonResponse({ error: 'Username already exists' }, 409);
+          return errorResponse(409, 'Conflict', 'Username already exists');
         }
 
         let uuid;
         if (customUuid) {
           const cleaned = customUuid.replace(/-/g, '');
           if (!/^[0-9a-f]{32}$/i.test(cleaned)) {
-            return jsonResponse({ error: 'Invalid UUID format (must be 32 hex chars, with or without dashes)' }, 400);
+            return errorResponse(400, 'IllegalArgumentException', `Invalid UUID string: ${customUuid}`);
           }
           const formatted = `${cleaned.substr(0,8)}-${cleaned.substr(8,4)}-${cleaned.substr(12,4)}-${cleaned.substr(16,4)}-${cleaned.substr(20,12)}`;
           const existUuid = await env.DB.prepare(
             'SELECT uuid FROM users WHERE uuid = ?'
           ).bind(formatted).first();
           if (existUuid) {
-            return jsonResponse({ error: 'UUID already exists' }, 409);
+            return errorResponse(409, 'Conflict', 'UUID already exists');
           }
           uuid = formatted;
         } else {
@@ -163,16 +181,21 @@ export default {
 
       // 7. 更新用户
       if (path === '/api/update' && method === 'PUT') {
-        const body = await request.json();
+        let body;
+        try {
+          body = await request.json();
+        } catch (e) {
+          return errorResponse(400, 'JsonParseException', 'Invalid JSON payload');
+        }
         const { username, skin_url, cape_url, model } = body;
         if (!username) {
-          return jsonResponse({ error: 'Username required' }, 400);
+          return errorResponse(400, 'IllegalArgumentException', 'Username required');
         }
         const exist = await env.DB.prepare(
           'SELECT username FROM users WHERE username = ?'
         ).bind(username).first();
         if (!exist) {
-          return jsonResponse({ error: 'User not found' }, 404);
+          return errorResponse(404, 'Not Found', 'The server has not found anything matching the request URI');
         }
         const updates = [];
         const params = [];
@@ -189,7 +212,7 @@ export default {
           params.push(model);
         }
         if (updates.length === 0) {
-          return jsonResponse({ error: 'No fields to update' }, 400);
+          return errorResponse(400, 'IllegalArgumentException', 'No fields to update');
         }
         params.push(username);
         await env.DB.prepare(
@@ -205,7 +228,7 @@ export default {
           'DELETE FROM users WHERE username = ?'
         ).bind(username).run();
         if (result.changes === 0) {
-          return jsonResponse({ error: 'User not found' }, 404);
+          return errorResponse(404, 'Not Found', 'The server has not found anything matching the request URI');
         }
         return jsonResponse({ success: true, username });
       }
@@ -217,9 +240,9 @@ export default {
         });
       }
 
-      return new Response('Not Found', { status: 404 });
+      return errorResponse(404, 'Not Found', 'The server has not found anything matching the request URI');
     } catch (e) {
-      return jsonResponse({ error: e.message }, 500);
+      return errorResponse(500, 'Internal Server Error', e.message);
     }
   }
 };
@@ -237,8 +260,22 @@ async function ensureTable(env) {
   ).run();
 }
 
+// 成功响应（JSON 美化）
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    }
+  });
+}
+
+// Mojang 风格错误响应
+function errorResponse(status, error, errorMessage, cause = null) {
+  const body = { error, errorMessage };
+  if (cause) body.cause = cause;
+  return new Response(JSON.stringify(body, null, 2), {
     status,
     headers: {
       'Content-Type': 'application/json',
@@ -402,7 +439,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
       showMsg(document.getElementById('updMessage'), '删除成功', false);
       loadUsers();
     } else {
-      showMsg(document.getElementById('updMessage'), data.error || '删除失败', true);
+      showMsg(document.getElementById('updMessage'), data.errorMessage || data.error || '删除失败', true);
     }
   };
 
@@ -437,7 +474,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
       document.getElementById('regCape').value = '';
       loadUsers();
     } else {
-      showMsg(document.getElementById('regMessage'), data.error || '注册失败', true);
+      showMsg(document.getElementById('regMessage'), data.errorMessage || data.error || '注册失败', true);
     }
   };
 
@@ -466,7 +503,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
       showMsg(document.getElementById('updMessage'), '更新成功！', false);
       loadUsers();
     } else {
-      showMsg(document.getElementById('updMessage'), data.error || '更新失败', true);
+      showMsg(document.getElementById('updMessage'), data.errorMessage || data.error || '更新失败', true);
     }
   };
 
