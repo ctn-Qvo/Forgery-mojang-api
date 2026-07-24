@@ -20,6 +20,7 @@ export default {
 
     try {
       // ----- 核心 Mojang API -----
+      // 1. 获取玩家 UUID
       const userMatch = path.match(/^\/users\/profiles\/minecraft\/(.+)$/);
       if (userMatch && method === 'GET') {
         const username = userMatch[1];
@@ -33,6 +34,7 @@ export default {
         return jsonResponse({ id: uuidNoDash, name: username });
       }
 
+      // 2. 获取玩家 profile（含纹理）
       const profileMatch = path.match(/^\/session\/minecraft\/profile\/([a-f0-9]{32})$/i);
       if (profileMatch && method === 'GET') {
         const uuidNoDash = profileMatch[1];
@@ -57,7 +59,8 @@ export default {
         if (user.cape_url) {
           textures.textures.CAPE = { url: user.cape_url };
         }
-        const value = btoa(unescape(encodeURIComponent(JSON.stringify(textures))));
+        // 美化 Base64 编码前的 JSON（缩进 2 个空格）
+        const value = btoa(unescape(encodeURIComponent(JSON.stringify(textures, null, 2))));
         return jsonResponse({
           id: uuidNoDash,
           name: user.username,
@@ -67,6 +70,7 @@ export default {
       }
 
       // ----- 拓展 API -----
+      // 3. 批量获取 UUID
       if (path === '/profiles/minecraft' && method === 'POST') {
         const body = await request.json();
         if (!Array.isArray(body) || body.length === 0 || body.length > 10) {
@@ -93,6 +97,7 @@ export default {
       }
 
       // ----- 管理 API -----
+      // 4. 获取所有用户
       if (path === '/api/users' && method === 'GET') {
         const { results } = await env.DB.prepare(
           'SELECT uuid, username, skin_url, cape_url, model FROM users ORDER BY username'
@@ -100,6 +105,7 @@ export default {
         return jsonResponse(results);
       }
 
+      // 5. 获取单个用户
       const singleUserMatch = path.match(/^\/api\/user\/(.+)$/);
       if (singleUserMatch && method === 'GET') {
         const username = singleUserMatch[1];
@@ -112,7 +118,7 @@ export default {
         return jsonResponse(user);
       }
 
-      // ----- 注册（支持自定义 UUID，自动格式化，同时接受皮肤/披风 URL）-----
+      // 6. 注册新用户（支持自定义UUID和URL）
       if (path === '/api/register' && method === 'POST') {
         const body = await request.json();
         const { username, uuid: customUuid, skin_url, cape_url, model } = body;
@@ -147,7 +153,6 @@ export default {
           uuid = uuidData[0];
         }
 
-        // 插入新用户，包含皮肤/披风 URL 和模型
         await env.DB.prepare(
           `INSERT INTO users (uuid, username, skin_url, cape_url, model)
            VALUES (?, ?, ?, ?, ?)`
@@ -156,7 +161,7 @@ export default {
         return jsonResponse({ success: true, uuid, username });
       }
 
-      // ----- 更新用户 -----
+      // 7. 更新用户
       if (path === '/api/update' && method === 'PUT') {
         const body = await request.json();
         const { username, skin_url, cape_url, model } = body;
@@ -193,7 +198,7 @@ export default {
         return jsonResponse({ success: true, username });
       }
 
-      // ----- 删除用户 -----
+      // 8. 删除用户
       if (singleUserMatch && method === 'DELETE') {
         const username = singleUserMatch[1];
         const result = await env.DB.prepare(
@@ -242,7 +247,7 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// ---------- 管理面板 HTML（移除所有表情符号）----------
+// ---------- 管理面板 HTML（无表情符号）----------
 const ADMIN_HTML = `<!DOCTYPE html>
 <html>
 <head>
