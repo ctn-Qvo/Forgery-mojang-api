@@ -1,6 +1,9 @@
 // 绑定 D1 数据库：DB
 export default {
   async fetch(request, env) {
+    // 确保表存在（每次请求尝试创建，已存在则忽略）
+    await ensureTable(env);
+
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
@@ -109,15 +112,14 @@ export default {
         return jsonResponse(user);
       }
 
-      // ----- 注册（支持自定义 UUID，自动格式化）-----
+      // ----- 注册（支持自定义 UUID，自动格式化，同时接受皮肤/披风 URL）-----
       if (path === '/api/register' && method === 'POST') {
         const body = await request.json();
-        const { username, uuid: customUuid } = body;
+        const { username, uuid: customUuid, skin_url, cape_url, model } = body;
         if (!username) {
           return jsonResponse({ error: 'Username required' }, 400);
         }
 
-        // 检查用户名是否已存在
         const exist = await env.DB.prepare(
           'SELECT username FROM users WHERE username = ?'
         ).bind(username).first();
@@ -127,15 +129,11 @@ export default {
 
         let uuid;
         if (customUuid) {
-          // 移除所有连字符
           const cleaned = customUuid.replace(/-/g, '');
-          // 检查是否为32位十六进制
           if (!/^[0-9a-f]{32}$/i.test(cleaned)) {
             return jsonResponse({ error: 'Invalid UUID format (must be 32 hex chars, with or without dashes)' }, 400);
           }
-          // 格式化为标准带连字符格式
           const formatted = `${cleaned.substr(0,8)}-${cleaned.substr(8,4)}-${cleaned.substr(12,4)}-${cleaned.substr(16,4)}-${cleaned.substr(20,12)}`;
-          // 检查 UUID 是否已被占用
           const existUuid = await env.DB.prepare(
             'SELECT uuid FROM users WHERE uuid = ?'
           ).bind(formatted).first();
@@ -144,16 +142,16 @@ export default {
           }
           uuid = formatted;
         } else {
-          // 自动生成
           const uuidResp = await fetch('https://www.uuidtools.com/api/generate/v4');
           const uuidData = await uuidResp.json();
           uuid = uuidData[0];
         }
 
-        // 插入新用户
+        // 插入新用户，包含皮肤/披风 URL 和模型
         await env.DB.prepare(
-          'INSERT INTO users (uuid, username, model) VALUES (?, ?, ?)'
-        ).bind(uuid, username, 'classic').run();
+          `INSERT INTO users (uuid, username, skin_url, cape_url, model)
+           VALUES (?, ?, ?, ?, ?)`
+        ).bind(uuid, username, skin_url || null, cape_url || null, model || 'classic').run();
 
         return jsonResponse({ success: true, uuid, username });
       }
@@ -221,6 +219,19 @@ export default {
   }
 };
 
+// 确保 users 表存在
+async function ensureTable(env) {
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS users (
+      uuid TEXT PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      skin_url TEXT,
+      cape_url TEXT,
+      model TEXT DEFAULT 'classic'
+    )`
+  ).run();
+}
+
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
@@ -231,76 +242,106 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-// ---------- 管理面板 HTML（更新提示） ----------
+// ---------- 管理面板 HTML（移除所有表情符号）----------
 const ADMIN_HTML = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <title>皮肤管理面板</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
-    .container { max-width: 1200px; margin: auto; }
-    .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    h2 { margin-top: 0; }
-    .form-group { margin-bottom: 10px; }
-    label { display: inline-block; width: 100px; }
-    input, select { padding: 6px 10px; width: 250px; }
-    button { padding: 6px 15px; cursor: pointer; }
-    .user-list table { width: 100%; border-collapse: collapse; }
-    .user-list th, .user-list td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
-    .actions button { margin-right: 5px; }
-    .message { color: green; }
-    .error { color: red; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f0f2f5; margin: 0; padding: 30px; }
+    .container { max-width: 1100px; margin: auto; }
+    h1 { font-weight: 500; color: #1a1a2e; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 20px; }
+    .card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .card h2 { margin-top: 0; font-weight: 500; color: #2d3748; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; }
+    .form-group { margin-bottom: 16px; display: flex; flex-wrap: wrap; align-items: center; }
+    .form-group label { width: 110px; font-weight: 500; color: #4a5568; }
+    .form-group input, .form-group select { flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 14px; }
+    .form-group .hint { font-size: 12px; color: #a0aec0; margin-left: 8px; }
+    button { background: #4299e1; color: white; border: none; padding: 8px 20px; border-radius: 6px; font-weight: 500; cursor: pointer; }
+    button:hover { background: #3182ce; }
+    .message { margin-top: 12px; padding: 8px 12px; border-radius: 6px; }
+    .message.success { background: #c6f6d5; color: #22543d; }
+    .message.error { background: #fed7d7; color: #9b2c2c; }
+    .user-list table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .user-list th { text-align: left; padding: 10px 8px; background: #f7fafc; border-bottom: 2px solid #e2e8f0; }
+    .user-list td { padding: 10px 8px; border-bottom: 1px solid #edf2f7; vertical-align: middle; }
+    .user-list .actions button { margin-right: 6px; font-size: 12px; padding: 4px 10px; }
+    .user-list .actions .delete { background: #fc8181; }
+    .user-list .actions .delete:hover { background: #f56565; }
+    .url-cell { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
 <div class="container">
   <h1>皮肤管理面板</h1>
+  <div class="grid">
+    <!-- 注册卡片 -->
+    <div class="card">
+      <h2>注册新用户</h2>
+      <div class="form-group">
+        <label>用户名</label>
+        <input type="text" id="regUsername" placeholder="输入玩家名" />
+      </div>
+      <div class="form-group">
+        <label>UUID（选填）</label>
+        <input type="text" id="regUuid" placeholder="32位十六进制，可带或不带连字符" />
+        <span class="hint">留空自动生成</span>
+      </div>
+      <div class="form-group">
+        <label>皮肤 URL</label>
+        <input type="url" id="regSkin" placeholder="https://example.com/skin.png" />
+      </div>
+      <div class="form-group">
+        <label>披风 URL</label>
+        <input type="url" id="regCape" placeholder="https://example.com/cape.png" />
+      </div>
+      <div class="form-group">
+        <label>模型</label>
+        <select id="regModel">
+          <option value="classic">Classic (Steve)</option>
+          <option value="slim">Slim (Alex)</option>
+        </select>
+      </div>
+      <button id="regBtn">注册</button>
+      <div id="regMessage" class="message"></div>
+    </div>
 
-  <div class="card">
-    <h2>注册新用户</h2>
-    <div class="form-group">
-      <label>用户名：</label>
-      <input type="text" id="regUsername" placeholder="输入玩家名" />
+    <!-- 更新卡片 -->
+    <div class="card">
+      <h2>更新用户信息</h2>
+      <div class="form-group">
+        <label>用户名</label>
+        <input type="text" id="updUsername" placeholder="输入玩家名" />
+      </div>
+      <div class="form-group">
+        <label>皮肤 URL</label>
+        <input type="url" id="updSkin" placeholder="https://example.com/skin.png" />
+      </div>
+      <div class="form-group">
+        <label>披风 URL</label>
+        <input type="url" id="updCape" placeholder="https://example.com/cape.png" />
+      </div>
+      <div class="form-group">
+        <label>模型</label>
+        <select id="updModel">
+          <option value="classic">Classic (Steve)</option>
+          <option value="slim">Slim (Alex)</option>
+        </select>
+      </div>
+      <button id="updBtn">更新</button>
+      <div id="updMessage" class="message"></div>
     </div>
-    <div class="form-group">
-      <label>UUID（选填）：</label>
-      <input type="text" id="regUuid" placeholder="32位十六进制，可带或不带连字符" />
-      <span style="font-size:12px;color:#888;">留空则自动生成</span>
-    </div>
-    <button id="regBtn">注册</button>
-    <div id="regMessage"></div>
   </div>
 
-  <div class="card">
-    <h2>更新用户信息</h2>
-    <div class="form-group">
-      <label>用户名：</label>
-      <input type="text" id="updUsername" placeholder="输入玩家名" />
-    </div>
-    <div class="form-group">
-      <label>皮肤 URL：</label>
-      <input type="url" id="updSkin" placeholder="https://example.com/skin.png" />
-    </div>
-    <div class="form-group">
-      <label>披风 URL：</label>
-      <input type="url" id="updCape" placeholder="https://example.com/cape.png" />
-    </div>
-    <div class="form-group">
-      <label>模型：</label>
-      <select id="updModel">
-        <option value="classic">Classic (Steve)</option>
-        <option value="slim">Slim (Alex)</option>
-      </select>
-    </div>
-    <button id="updBtn">更新</button>
-    <div id="updMessage"></div>
-  </div>
-
-  <div class="card user-list">
+  <!-- 用户列表 -->
+  <div class="card user-list" style="margin-top: 24px;">
     <h2>已注册用户</h2>
     <table>
-      <thead><tr><th>UUID</th><th>用户名</th><th>模型</th><th>操作</th></tr></thead>
+      <thead><tr><th>UUID</th><th>用户名</th><th>模型</th><th>皮肤</th><th>披风</th><th>操作</th></tr></thead>
       <tbody id="userTableBody"></tbody>
     </table>
   </div>
@@ -311,7 +352,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
 
   function showMsg(container, msg, isError = false) {
     container.textContent = msg;
-    container.className = isError ? 'error' : 'message';
+    container.className = 'message ' + (isError ? 'error' : 'success');
   }
 
   async function loadUsers() {
@@ -326,9 +367,11 @@ const ADMIN_HTML = `<!DOCTYPE html>
         <td>\${u.uuid}</td>
         <td>\${u.username}</td>
         <td>\${u.model || 'classic'}</td>
+        <td class="url-cell">\${u.skin_url ? \`<a href="\${u.skin_url}" target="_blank">链接</a>\` : '-'}</td>
+        <td class="url-cell">\${u.cape_url ? \`<a href="\${u.cape_url}" target="_blank">链接</a>\` : '-'}</td>
         <td class="actions">
           <button onclick="editUser('\${u.username}')">编辑</button>
-          <button onclick="deleteUser('\${u.username}')">删除</button>
+          <button class="delete" onclick="deleteUser('\${u.username}')">删除</button>
         </td>
       \`;
       tbody.appendChild(tr);
@@ -358,6 +401,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
     }
   };
 
+  // 注册
   document.getElementById('regBtn').onclick = async function() {
     const username = document.getElementById('regUsername').value.trim();
     if (!username) {
@@ -365,8 +409,14 @@ const ADMIN_HTML = `<!DOCTYPE html>
       return;
     }
     const uuid = document.getElementById('regUuid').value.trim() || undefined;
+    const skin_url = document.getElementById('regSkin').value.trim() || undefined;
+    const cape_url = document.getElementById('regCape').value.trim() || undefined;
+    const model = document.getElementById('regModel').value;
     const payload = { username };
     if (uuid) payload.uuid = uuid;
+    if (skin_url) payload.skin_url = skin_url;
+    if (cape_url) payload.cape_url = cape_url;
+    if (model) payload.model = model;
 
     const resp = await fetch(API_BASE + '/api/register', {
       method: 'POST',
@@ -378,12 +428,15 @@ const ADMIN_HTML = `<!DOCTYPE html>
       showMsg(document.getElementById('regMessage'), '注册成功！UUID: ' + data.uuid, false);
       document.getElementById('regUsername').value = '';
       document.getElementById('regUuid').value = '';
+      document.getElementById('regSkin').value = '';
+      document.getElementById('regCape').value = '';
       loadUsers();
     } else {
       showMsg(document.getElementById('regMessage'), data.error || '注册失败', true);
     }
   };
 
+  // 更新
   document.getElementById('updBtn').onclick = async function() {
     const username = document.getElementById('updUsername').value.trim();
     if (!username) {
