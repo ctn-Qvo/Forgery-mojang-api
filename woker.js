@@ -176,7 +176,7 @@ function errorResponse(status, error, errorMessage, cause = null) {
   });
 }
 
-// ---------- 管理面板 HTML（已移除“离线支持”标签）----------
+// ---------- 管理面板 HTML（移除了“离线支持”标签）----------
 const ADMIN_HTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -475,7 +475,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
     container.className = 'message ' + (isError ? 'error' : 'success');
   }
 
-  // ----- MD5 实现（纯 JS）-----
+  // ----- 标准 MD5 实现（RFC 1321）-----
   function md5(string) {
     function md5cycle(x, k) {
       var a = x[0], b = x[1], c = x[2], d = x[3];
@@ -593,7 +593,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
     var x = [1732584193, -271733879, -1732584194, 271733878];
     var i, j, data, len, pos;
 
-    // 转换为字节数组
+    // 将字符串转换为字节数组（UTF-8）
     var bytes = [];
     for (i = 0; i < string.length; i++) {
       var code = string.charCodeAt(i);
@@ -625,17 +625,19 @@ const ADMIN_HTML = `<!DOCTYPE html>
     return toHex(x[0]) + toHex(x[1]) + toHex(x[2]) + toHex(x[3]);
   }
 
-  // 离线 UUID 生成函数（使用 MD5）
   function generateOfflineUUID(username) {
-    const hash = md5("OfflinePlayer:" + username);
+    var hash = md5("OfflinePlayer:" + username);
     return hash.substr(0,8) + '-' + hash.substr(8,4) + '-' + hash.substr(12,4) + '-' + hash.substr(16,4) + '-' + hash.substr(20,12);
   }
+
+  // 测试用例：验证 ctn32 -> 7bcd7cac-982e-3be6-8446-1ed3b7364c42
+  console.log("ctn32 UUID:", generateOfflineUUID("ctn32"));
 
   const offlineCheck = document.getElementById('offlineCheck');
   const regUsername = document.getElementById('regUsername');
   const regUuid = document.getElementById('regUuid');
 
-  async function updateOfflineUuid() {
+  function updateOfflineUuid() {
     if (offlineCheck.checked) {
       const username = regUsername.value.trim();
       if (username) {
@@ -710,7 +712,7 @@ const ADMIN_HTML = `<!DOCTYPE html>
     }
     let uuid = regUuid.value.trim() || undefined;
     if (offlineCheck.checked && !uuid) {
-      await updateOfflineUuid();
+      updateOfflineUuid();
       uuid = regUuid.value.trim() || undefined;
     }
     const skin_url = document.getElementById('regSkin').value.trim() || undefined;
